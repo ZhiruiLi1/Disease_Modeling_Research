@@ -1,0 +1,179 @@
+---
+title: "Summary Statistics for Each SNP Cluster"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+library(naniar)
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(tableone)
+```
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+setwd("~/Desktop")
+isolates <- read_csv("isolates.csv")
+```
+
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+isolates = isolates %>%
+  select(-c(Computed_types, Virulence_genotypes, AST_phenotypes))
+
+isolates = isolates %>%
+  select(-c(Host_disease, PFGE_secondary_enzyme_pattern, PFGE_primary_enzyme_pattern, Stress_genotypes, `Lat/Lon`, Host, Source_type, IFSAC_category, Serovar))
+
+isolates = isolates %>%
+  select(-c(Species_TaxID, `K-mer_group`, Organism_group))
+
+isolates = isolates %>%
+  select(-c(WGS_accession, WGS_prefix, Run, Isolate, Assembly))
+
+isolates = isolates %>%
+  select(-c(AMRFinderPlus_version, PD_Ref_Gene_Catalog_version, Level))
+
+isolates <- isolates %>% 
+    mutate(across(.cols=c(Library_layout, Method, SRA_Center, Platform, AMR_genotypes_core, BioProject, Collection_date, Collected_by, AMRFinderPlus_analysis_type, Scientific_name, Strain, Isolate_identifiers, Location, Isolation_source, Isolation_type, SNP_cluster, BioSample, AMR_genotypes, TaxID), .fns = as.factor))
+
+isolates <- isolates %>% 
+    mutate(across(.cols=c(SRA_release_date, Create_date), .fns = as.Date))
+
+
+isolates = isolates %>%
+  select(-c(Library_layout, Method, Platform, AMRFinderPlus_analysis_type, Isolate_identifiers, BioSample ))
+
+isolates = isolates %>%
+  select(-Strain)
+
+isolates$Outbreak = ifelse(is.na(isolates$Outbreak), 0, 1)
+```
+
+
+```{r}
+dim(isolates)
+```
+
+
+```{r}
+table(isolates$Outbreak)
+```
+
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+count_SNP = as.data.frame(table(isolates$SNP_cluster))
+colnames(count_SNP)[colnames(count_SNP) == "Var1"] <- "SNP_cluster"
+colnames(count_SNP)[colnames(count_SNP) == "Freq"] <- "Frequency"
+count_SNP =count_SNP[order(-count_SNP$Frequency),] 
+
+count_SNP_20 = count_SNP[1:20,]
+SNP_percentage = numeric(20)
+for (i in 1:20){
+  SNP_percentage[i] = (count_SNP$Frequency[i]/sum(count_SNP$Frequency))*100
+}
+count_SNP_20['SNP_percentage'] <- SNP_percentage
+```
+
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+SNP_vector1 = vector()
+SNP_vector2 = vector()
+
+for (i in 1:11){
+  new_cluster = isolates %>%
+    filter((SNP_cluster == count_SNP_20[i,1]))
+  name = sprintf("SNP_cluster_%s", count_SNP_20[i,1])
+  assign(name, new_cluster)
+  SNP_vector1 = append(SNP_vector1, name)
+}
+
+for (i in 1:11){
+  name = sprintf("%s", count_SNP_20[i,1])
+  SNP_vector2 = append(SNP_vector2, name)
+}
+```
+
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+filtered_isolates = isolates %>%
+  filter((SNP_cluster %in% SNP_vector2))
+dim(filtered_isolates)
+```
+
+I filtered out all the observations that are not in the top 11 SNP clusters for Listeria Monocytogenes. Right now, we have 8980 observations and 20 columns for the dataset. 
+
+
+```{r}
+colnames(isolates)
+```
+
+
+
+```{r}
+partial_dataset = filtered_isolates %>%
+  select(c(Location, Isolation_source, `Min-same`, `Min-diff`, SNP_cluster))
+```
+
+
+
+
+Then, for each cluster in the top 11 SNP clusters, I select columns such as 'Location', 'Isolation_source', 'Min-same', 'Min-diff' to conduct summary table (those are the most relevant information in the dataset). 
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+for (i in 1:11){
+  new_cluster =  partial_dataset %>%
+    filter((SNP_cluster == count_SNP_20[i,1]))
+  print(sprintf("this is the summary table for SNP cluster %s", SNP_vector2[i]))
+  print(summary(new_cluster))
+}
+```
+
+
+For SNP cluster PDS000000366.488, most of the cases took place in New York, Canada, California and Florida. The isolation source is mainly from environmental swab and food. The mean for Min-same is 4.66 and the mean for min-diff is 17.5.
+
+For SNP cluster PDS000025311.237, most of the cases took place in United Kingdom and Germany. The isolation source is mainly from food and human listeriosis. The mean for Min-same is 6.2 and the mean for min-diff is 14.
+
+For SNP cluster PDS000024989.118, most of the cases took place in Texas and California. The isolation source is mainly from environmental swab. The mean for Min-same is 4.3 and the mean for min-diff is 19.
+
+For SNP cluster PDS000024656.169, most of the cases took place in United Kingdom. The isolation source is mainly from food and environmental. The mean for Min-same is 4.3 and the mean for min-diff is 18.
+
+For SNP cluster PDS000024645.140, most of the cases took place in United Kingdom and Rhode Island. The isolation source is mainly from food. The mean for Min-same is 6.2 and the mean for min-diff is 19.
+
+For SNP cluster PDS000024856.153, most of the cases took place in USA and Sichuang(China). Most of the isolation sources are environmental swab, food, and blood. The mean for Min-same is 7 and the mean for min-diff is 18.
+
+For SNP cluster PDS000024241.94, most of the cases took place in Italy and Norway. The isolation source is mainly from meat processing facility and food. The mean for Min-same is 5.3 and the mean for min-diff is 21.6.
+
+For SNP cluster PDS000024682.133, most of the cases took place in Germany, United Kingdom, and South Africa. The isolation source is mainly from human listeriosis and food. The mean for Min-same is 4.87 and the mean for min-diff is 15.1.
+
+For SNP cluster PDS000024934.77, most of the cases took place in California. The isolation source is mainly from water sediment. The mean for Min-same is 4.8 and the mean for min-diff is 9.1.
+
+For SNP cluster PDS000024900.112, most of the cases took place in United Kingdom and Canada. The isolation source is mainly from food. The mean for Min-same is 5.5 and the mean for min-diff is 23.2.
+
+For SNP cluster PDS000032941.132, most of the cases took place in United Kingdom. The isolation source is mainly from food. The mean for Min-same is 9.5 and the mean for min-diff is 21.
+
+
+# Code Appendix:
+
+```{r ref.label=knitr::all_labels(), echo=TRUE, eval=FALSE}
+
+```
+
+
+
+
+
+
+
+

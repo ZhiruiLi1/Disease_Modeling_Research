@@ -1,0 +1,372 @@
+---
+title: "Data Cleaning and EDA"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+library(naniar)
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(tableone)
+```
+
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+setwd("~/Desktop")
+isolates <- read_csv("isolates.csv")
+dim(isolates)
+```
+
+The original dataset without any cleaning has 51738 observations and 50 columns. 
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+apply(isolates, 2,  function(x) sum(complete.cases(x))/nrow(isolates)) 
+```
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+isolates1 = isolates[,c(1:10)]
+isolates2 = isolates[,c(11:20)]
+isolates3 = isolates[,c(21:30)]
+isolates4 = isolates[,c(31:40)]
+isolates5 = isolates[,c(41:50)]
+vis_miss(isolates1)
+vis_miss(isolates2)
+vis_miss(isolates3)
+vis_miss(isolates4)
+vis_miss(isolates5)
+```
+
+Above table and graphs show the missing pattern of the dataset we are working with. 
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+isolates = isolates %>%
+  select(-c(Computed_types, Virulence_genotypes, AST_phenotypes))
+```
+
+I drop variables Computed_types, Virulence_genotypes, and AST_phenotypes because these columns are completely empty.
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+isolates = isolates %>%
+  select(-c(Host_disease, PFGE_secondary_enzyme_pattern, PFGE_primary_enzyme_pattern, Stress_genotypes, `Lat/Lon`, Host, Source_type, IFSAC_category, Serovar))
+```
+
+I drop variables Host_disease, PFGE_secondary_enzyme_pattern, PFGE_primary_enzyme_pattern, Stress_genotypes, Lat/Lon, Host, Source_type, IFSAC_category, and Serovar because they contain too many missing values. 
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+isolates = isolates %>%
+  select(-c(Species_TaxID, `K-mer_group`, Organism_group))
+```
+
+I drop variables Species_TaxID, K-mer_group, and Organism_group because every entry of these variables is the same value.
+
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+isolates = isolates %>%
+  select(-c(WGS_accession, WGS_prefix, Run, Isolate, Assembly))
+```
+
+I drop variables WGS_accession, WGS_prefix, Run, Isolate, and Assembly because every level of these variables only contain one observation (there are too many levels for these columns). 
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+isolates = isolates %>%
+  select(-c(AMRFinderPlus_version, PD_Ref_Gene_Catalog_version, Level))
+```
+
+I drop variables AMRFinderPlus_version, PD_Ref_Gene_Catalog_version, and Level because they are useless information. 
+
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+isolates <- isolates %>% 
+    mutate(across(.cols=c(Library_layout, Method, SRA_Center, Platform, AMR_genotypes_core, BioProject, Collection_date, Collected_by, AMRFinderPlus_analysis_type, Scientific_name, Strain, Isolate_identifiers, Location, Isolation_source, Isolation_type, SNP_cluster, BioSample, AMR_genotypes, TaxID), .fns = as.factor))
+```
+
+I convert all the categorical variables to factors. 
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+isolates <- isolates %>% 
+    mutate(across(.cols=c(SRA_release_date, Create_date), .fns = as.Date))
+```
+
+I apply as.Date() function to all the date variables. 
+
+
+
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+isolates = isolates %>%
+  select(-c(Library_layout, Method, Platform, AMRFinderPlus_analysis_type, Isolate_identifiers, BioSample ))
+```
+
+I remove all the variables above since they are useless information. 
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+for (i in 1:ncol(isolates)){
+  number = nrow(unique(isolates[,i]))
+  print(sprintf("%s: %s", colnames(isolates)[i], number))
+}
+```
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+isolates = isolates %>%
+  select(-Strain)
+```
+
+Then, we calculate number of levels for all the categorical variable. I remove Strain from the dataset because it has too many levels and doesn't contain much useful information. 
+
+
+```{r}
+table(isolates$Outbreak)
+```
+
+Above table shows different levels for the column 'Outbreak'
+
+
+```{r}
+isolates$Outbreak = ifelse(is.na(isolates$Outbreak), 0, 1)
+# if the value is NA, then coded as 0, otherwise, coded as 1
+
+table(isolates$Outbreak)
+```
+
+For the variable 'Outbreak', if the value is missing, I coded it as 0, otherwise, I coded it as 1. 
+
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+summary(isolates)
+```
+
+This is the summary table after all the data cleaning procedures. 
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+dim(isolates)
+```
+
+We have 51738 observations and 20 columns in the dataset (we don't conduct complete cases analysis).
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+count_location = as.data.frame(table(isolates$Location))
+colnames(count_location)[colnames(count_location) == "Var1"] <- "Location"
+colnames(count_location)[colnames(count_location) == "Freq"] <- "Frequency"
+count_location =count_location[order(-count_location$Frequency),]  
+# order by descending
+# order() returns indices
+count_location_10 = count_location[1:10,]
+location_percentage = numeric(10)
+for (i in 1:10){
+  location_percentage[i] = count_location$Frequency[i]/sum(count_location$Frequency)
+}
+count_location_10['location_percentage'] <- location_percentage
+```
+
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+ggplot(data = count_location_10, aes(x = reorder(Location, -Frequency), 
+                                  y = Frequency, 
+                                  label = scales::percent(location_percentage),
+                                  fill = Location)) +
+  geom_bar(stat = 'identity') +
+  ggtitle('Top 10 Locations with the Highest Listeria Monocytogenes Cases') +
+  geom_text(vjust = -0.3,
+            size = 2) +
+  labs(x = 'Location', y = 'Frequency') +
+  theme(axis.text.x = element_text(angle=90, hjust=1, vjust=0.1)) +
+  theme(legend.position="none")
+```
+
+Above graph depicts top 10 location with the highest Listeria Monocytogenes Cases. We can see that USA accounts for almost 19% of all the cases. 
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+count_source = as.data.frame(table(isolates$Isolation_source))
+colnames(count_source)[colnames(count_source) == "Var1"] <- "Source"
+colnames(count_source)[colnames(count_source) == "Freq"] <- "Frequency"
+count_source =count_source[order(-count_source$Frequency),]  
+
+count_source_10 = count_source[1:10,]
+source_percentage = numeric(10)
+for (i in 1:10){
+  source_percentage[i] = count_source$Frequency[i]/sum(count_source$Frequency)
+}
+count_source_10['source_percentage'] <- source_percentage
+```
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+ggplot(data = count_source_10, aes(x = reorder(Source, -Frequency), 
+                                  y = Frequency, 
+                                  label = scales::percent(source_percentage),
+                                  fill = Source)) +
+  geom_bar(stat = 'identity') +
+  ggtitle('Top 10 Isolation Sources that Caused Listeria Monocytogenes') +
+  geom_text(vjust = -0.2,
+            size = 2) +
+  labs(x = 'Isolation Source', y = 'Frequency') +
+  theme(axis.text.x = element_text(angle=90, hjust=1, vjust=0.1)) + 
+  theme(legend.position="none")
+```
+
+Above graph depicts top 10 isolation sources that caused Listeria Monocytogenes. We can see that both food and environmental swab account for almost 12% of all the cases.
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+SRA_center = as.data.frame(table(isolates$SRA_Center))
+colnames(SRA_center)[colnames(SRA_center) == "Var1"] <- "SRA_center"
+colnames(SRA_center)[colnames(SRA_center) == "Freq"] <- "Frequency"
+SRA_center = SRA_center[order(-SRA_center$Frequency),]  
+
+count_SRA_center_10 = SRA_center[1:10,]
+SRA_center_percentage = numeric(10)
+for (i in 1:10){
+  SRA_center_percentage[i] = SRA_center$Frequency[i]/sum(SRA_center$Frequency)
+}
+count_SRA_center_10['SRA_center_percentage'] <- SRA_center_percentage
+```
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+ggplot(data = count_SRA_center_10, aes(x = reorder(SRA_center, -Frequency), 
+                                  y = Frequency, 
+                                  label = scales::percent(SRA_center_percentage),
+                                  fill = SRA_center)) +
+  geom_bar(stat = 'identity') +
+  ggtitle('Top 10 SRA centers for the Listeria Monocytogenes') +
+  geom_text(vjust = -0.1,
+            size = 2) +
+  labs(x = 'SRA center', y = 'Frequency') +
+  theme(axis.text.x = element_text(angle=90, hjust=1, vjust=0.1)) + 
+  theme(legend.position="none")
+```
+
+Above graph depicts where the data entry is coming from. We can see that about 34% of observations coming from CFSAN database. 
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+hist(isolates$`Min-diff`)
+```
+
+Above graph shows the distribution of variable Min-diff, which means minimum SNP distance from this isolate to one of a different isolation type. 
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+hist(isolates$`Min-same`)
+```
+
+Above graph shows the distribution of variable Min-same, which means Minimum SNP distance from this isolate to one of the same isolation type. Min-same has much lower value compared to Min-diff. 
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+unique_cluster = unique(isolates$SNP_cluster)
+length(unique_cluster)
+```
+
+There are total 4378 different SNP clusters in the dataset. 
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+count_SNP = as.data.frame(table(isolates$SNP_cluster))
+colnames(count_SNP)[colnames(count_SNP) == "Var1"] <- "SNP_cluster"
+colnames(count_SNP)[colnames(count_SNP) == "Freq"] <- "Frequency"
+count_SNP =count_SNP[order(-count_SNP$Frequency),] 
+
+count_SNP_10 = count_SNP[1:10,]
+SNP_percentage = numeric(10)
+for (i in 1:10){
+  SNP_percentage[i] = count_SNP$Frequency[i]/sum(count_SNP$Frequency)
+}
+count_SNP_10['SNP_percentage'] <- SNP_percentage
+```
+
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+ggplot(data = count_SNP_10, aes(x = reorder(SNP_cluster, -Frequency), 
+                                  y = Frequency, 
+                                  label = scales::percent(SNP_percentage),
+                                  fill = SNP_cluster)) +
+  geom_bar(stat = 'identity') +
+  ggtitle('Top 10 SNP Clusters for the Listeria Monocytogenes') +
+  geom_text(vjust = -0.2,
+            size = 2) +
+  labs(x = 'SNP Cluster', y = 'Frequency') +
+  theme(axis.text.x = element_text(angle=90, hjust=1, vjust=0.1)) + 
+  theme(legend.position="none")
+```
+
+Above graph depicts top 10 SNP clusters for Listeria Monocytogenes cases. We can see that cluster PDS000000366.488 account for almost 4% of all the cases. 
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+count_SNP_20 = count_SNP[1:20,]
+SNP_percentage = numeric(20)
+for (i in 1:20){
+  SNP_percentage[i] = (count_SNP$Frequency[i]/sum(count_SNP$Frequency))*100
+}
+count_SNP_20['SNP_percentage'] <- SNP_percentage
+count_SNP_20
+sum(count_SNP_20$SNP_percentage)
+```
+
+Above table shows top 20 clusters with the most observations. We can see that the first 11 clusters all contain at least 1% of the whole dataset, so that we will further investigate them. 
+
+
+
+# Code Appendix:
+
+```{r ref.label=knitr::all_labels(), echo=TRUE, eval=FALSE}
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

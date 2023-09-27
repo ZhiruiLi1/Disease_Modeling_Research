@@ -1,0 +1,1750 @@
+---
+title: "Summer Research Final Report"
+author: "Zhirui Li"
+date: "7/23/2022"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+library(naniar)
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(gsarima)
+library(forecast)
+library(caret)
+library(zoo)
+library(astsa)
+library(DescTools)
+library(tscount)
+```
+
+
+# Explanatory Data Analysis
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+setwd("~/Desktop")
+isolates <- read_csv("isolates.csv")
+dim(isolates)
+```
+
+We are going to use the Listeria Monocytogenes dataset from the National Center for Biotechnology Information to predict Listeriosis outbreak. The dataset we are working with has 51738 observations and 50 columns (variables). 
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+sum(complete.cases(isolates$Outbreak))/nrow(isolates)
+isolates$Outbreak = ifelse(is.na(isolates$Outbreak), 0, 1)
+table(isolates$Outbreak)
+```
+
+The 'Outbreak' column in the dataset indicates that if there is an actual outbreak for the Listeriosis infection. Approximately 99.5% of its information are missing so that for all the missing values, we encoded it as 0 (indicating that there is no Listeria outbreak). If there is a data entry for the 'Outbreak' column, we encoded it as 1 (indicating that there is a Listeria outbreak). We can see that there are a total of 247 Listeria outbreaks. 
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+apply(isolates, 2,  function(x) sum(complete.cases(x))/nrow(isolates)) 
+```
+
+Above table shows the missing pattern for each variable in the dataset. Since we are going to use times series models to forecast Listeriosis infection cases, we don't need to conduct a complete case analysis because missing values in each variable will not affect time series model's performance. 
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+isolates <- isolates %>% 
+    mutate(across(.cols=c(Location, Source_type, SNP_cluster), .fns = as.factor))
+```
+
+
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+count_location = as.data.frame(table(isolates$Location))
+colnames(count_location)[colnames(count_location) == "Var1"] <- "Location"
+colnames(count_location)[colnames(count_location) == "Freq"] <- "Frequency"
+count_location =count_location[order(-count_location$Frequency),]  
+# order by descending
+# order() returns indices
+count_location_10 = count_location[1:10,]
+location_percentage = numeric(10)
+for (i in 1:10){
+  location_percentage[i] = count_location$Frequency[i]/sum(count_location$Frequency)
+}
+count_location_10['location_percentage'] <- location_percentage
+```
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+ggplot(data = count_location_10, aes(x = reorder(Location, -Frequency), 
+                                  y = Frequency, 
+                                  label = scales::percent(location_percentage),
+                                  fill = Location)) +
+  geom_bar(stat = 'identity') +
+  ggtitle('Top 10 Locations with the Highest Listeria Monocytogenes Cases') +
+  geom_text(vjust = -0.3,
+            size = 2) +
+  labs(x = 'Location', y = 'Frequency') +
+  theme(axis.text.x = element_text(angle=90, hjust=1, vjust=0.1)) +
+  theme(legend.position="none")
+```
+
+Above graph depicts top 10 location with the highest Listeriosis cases. We can see that USA has the highest cases and accounts for almost 19% of all the occurences. 
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+count_source = as.data.frame(table(isolates$Source_type))
+colnames(count_source)[colnames(count_source) == "Var1"] <- "Source"
+colnames(count_source)[colnames(count_source) == "Freq"] <- "Frequency"
+count_source =count_source[order(-count_source$Frequency),]  
+
+count_source_10 = count_source[1:10,]
+source_percentage = numeric(10)
+for (i in 1:10){
+  source_percentage[i] = count_source$Frequency[i]/sum(count_source$Frequency)
+}
+count_source_10['source_percentage'] <- source_percentage
+```
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+ggplot(data = count_source_10, aes(x = reorder(Source, -Frequency), 
+                                  y = Frequency, 
+                                  label = scales::percent(source_percentage),
+                                  fill = Source)) +
+  geom_bar(stat = 'identity') +
+  ggtitle('Top 10 Categories of Isolate Origin that Caused Listeria Monocytogenes') +
+  geom_text(vjust = -0.2,
+            size = 2) +
+  labs(x = 'Source Origin', y = 'Frequency') +
+  theme(axis.text.x = element_text(angle=90, hjust=1, vjust=0.1)) + 
+  theme(legend.position="none")
+```
+
+Above graph depicts the general categories of isolate origin. We can see that most of the Listeria isolates have an environmental origin (about 58% of all the data); 33% of all the Listeria isolates are coming from food sources. 
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+unique_cluster = unique(isolates$SNP_cluster)
+length(unique_cluster)
+```
+
+In the whole dataset, we have 4378 different SNP clusters for the Listeria Monocytogenes. 
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+count_SNP = as.data.frame(table(isolates$SNP_cluster))
+colnames(count_SNP)[colnames(count_SNP) == "Var1"] <- "SNP_cluster"
+colnames(count_SNP)[colnames(count_SNP) == "Freq"] <- "Frequency"
+count_SNP =count_SNP[order(-count_SNP$Frequency),] 
+
+count_SNP_10 = count_SNP[1:10,]
+SNP_percentage = numeric(10)
+for (i in 1:10){
+  SNP_percentage[i] = count_SNP$Frequency[i]/sum(count_SNP$Frequency)
+}
+count_SNP_10['SNP_percentage'] <- SNP_percentage
+```
+
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+count_SNP_10 = count_SNP[1:10,]
+SNP_percentage = numeric(10)
+for (i in 1:10){
+  SNP_percentage[i] = count_SNP$Frequency[i]/sum(count_SNP$Frequency)
+}
+count_SNP_10['SNP_percentage'] <- SNP_percentage
+sum(count_SNP_10$SNP_percentage)
+```
+
+The top 10 SNP clusters for the Listeria Monocytogenes captured almost 20% of the whole dataset. 
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+ggplot(data = count_SNP_10, aes(x = reorder(SNP_cluster, -Frequency), 
+                                  y = Frequency, 
+                                  label = scales::percent(SNP_percentage),
+                                  fill = SNP_cluster)) +
+  geom_bar(stat = 'identity') +
+  ggtitle('Top 10 SNP Clusters for the Listeria Monocytogenes') +
+  geom_text(vjust = -0.2,
+            size = 2) +
+  labs(x = 'SNP Cluster', y = 'Frequency') +
+  theme(axis.text.x = element_text(angle=90, hjust=1, vjust=0.1)) + 
+  theme(legend.position="none")
+```
+
+Above graph depicts top 10 SNP clusters for Listeria Monocytogenes cases. We can see that cluster PDS000000366.488 is the biggest one and accounts for almost 4% of all the cases. 
+
+
+# Summary Statistics for each SNP Cluster
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+count_SNP = as.data.frame(table(isolates$SNP_cluster))
+colnames(count_SNP)[colnames(count_SNP) == "Var1"] <- "SNP_cluster"
+colnames(count_SNP)[colnames(count_SNP) == "Freq"] <- "Frequency"
+count_SNP =count_SNP[order(-count_SNP$Frequency),] 
+
+count_SNP_10 = count_SNP[1:10,]
+SNP_percentage = numeric(10)
+for (i in 1:10){
+  SNP_percentage[i] = (count_SNP$Frequency[i]/sum(count_SNP$Frequency))*100
+}
+count_SNP_10['SNP_percentage'] <- SNP_percentage
+```
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+SNP_vector1 = vector()
+
+for (i in 1:11){
+  name = sprintf("%s", count_SNP_10[i,1])
+  SNP_vector1 = append(SNP_vector1, name)
+}
+```
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+filtered_isolates = isolates %>%
+  filter((SNP_cluster %in% SNP_vector1))
+dim(filtered_isolates)
+```
+
+
+Next, we are going to compare and contrast the top 10 SNP clusters. I filtered out all the observations that are not in the top 10 SNP clusters for Listeria Monocytogenes. Right now, we have 8517 observations left.
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+partial_dataset = filtered_isolates %>%
+  select(c(Location, Source_type, `Min-same`, `Min-diff`, SNP_cluster))
+```
+
+Then, for each cluster in the top 10 SNP clusters, I selected columns such as 'Location', 'Source_type', 'Min-same', and 'Min-diff' to form the summary table (those are the most relevant information in the dataset). 'Location' represents the geographical origin of the sample. 'Source_type' represents the general category of isolate origin. 'Min-same' represents the minimum SNP distance from this isolate to one of the same isolation type. 'Min-diff' represents the minimum SNP distance from this isolate to one of a different isolation type. 
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+for (i in 1:10){
+  new_cluster =  partial_dataset %>%
+    filter((SNP_cluster == count_SNP_10[i,1]))
+  print(sprintf("this is the summary table for SNP cluster %s", SNP_vector1[i]))
+  print(summary(new_cluster))
+}
+```
+
+
+For SNP cluster PDS000000366.488, most of the cases took place in New York, Canada, California and Florida. The origin for all the Listeria cases is mainly environmental. The mean for 'Min-same' is 4.66 and the mean for 'Min-diff' is 17.5.
+
+For SNP cluster PDS000025311.237, most of the cases took place in United Kingdom and Germany. The origin for all the Listeria cases is mainly from food source. The mean for 'Min-same' is 6.2 and the mean for 'Min-diff' is 14.
+
+For SNP cluster PDS000024989.118, most of the cases took place in Texas and California. The origin for all the Listeria cases is mainly environmental. The mean for 'Min-same' is 4.3 and the mean for 'Min-diff' is 19.
+
+For SNP cluster PDS000024656.169, most of the cases took place in United Kingdom. The origin for all the Listeria cases is mainly from food source. The mean for 'Min-same' is 4.3 and the mean for 'Min-diff' is 18.
+
+For SNP cluster PDS000024645.140, most of the cases took place in United Kingdom and Rhode Island. The origin for all the Listeria cases is mainly environmental. The mean for 'Min-same' is 6.2 and the mean for 'Min-diff' is 19.
+
+For SNP cluster PDS000024856.153, most of the cases took place in USA and Sichuan(China). The origin for all the Listeria cases is mainly environmental. The mean for 'Min-same' is 7 and the mean for 'Min-diff' is 18.
+
+For SNP cluster PDS000024241.94, most of the cases took place in Italy and Norway. The origin for all the Listeria cases is mainly from food source. The mean for 'Min-same' is 5.3 and the mean for 'Min-diff' is 21.6.
+
+For SNP cluster PDS000024682.133, most of the cases took place in Germany, United Kingdom, and South Africa. The origin for all the Listeria cases is mainly from food source. The mean for 'Min-same' is 4.87 and the mean for 'Min-diff' is 15.1.
+
+For SNP cluster PDS000024934.77, most of the cases took place in California. The origin for all the Listeria cases is mainly environmental. The mean for 'Min-same' is 4.8 and the mean for 'Min-diff' is 9.1.
+
+For SNP cluster PDS000024900.112, most of the cases took place in United Kingdom and Canada. The origin for all the Listeria cases is mainly environmental. The mean for 'Min-same' is 5.5 and the mean for 'Min-diff' is 23.2.
+
+
+
+# SNP Cluster Visualization by Month and by Week 
+
+After analyzing the summary statistics for each SNP cluster, I am going to visualize the evolution of Listeria cases within each SNP cluster with month as an interval unit. 
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+count_SNP_20 = count_SNP[1:20,]
+SNP_percentage = numeric(20)
+for (i in 1:20){
+  SNP_percentage[i] = (count_SNP$Frequency[i]/sum(count_SNP$Frequency))*100
+}
+count_SNP_20['SNP_percentage'] <- SNP_percentage
+```
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+for (i in 1:10){
+  new_cluster = isolates %>%
+    filter((SNP_cluster == count_SNP_20[i,1]))
+  
+  new_cluster$Create_date_YM = format(as.Date(new_cluster$Create_date), "%Y-%m")
+  
+  count_date = as.data.frame(table(new_cluster$Create_date_YM))
+  colnames(count_date)[colnames(count_date) == "Var1"] <- "Date"
+  colnames(count_date)[colnames(count_date) == "Freq"] <- "Frequency"
+  
+  count_date$red = 0
+  for (j in 1:dim(new_cluster)[1]){
+    if(new_cluster$Outbreak[j] == 1){
+      number = which(count_date$Date == noquote(new_cluster$Create_date_YM[j]))
+      count_date$red[number] = 1
+      }
+    }
+  
+  
+  cluster_name = count_SNP_20[i,1]
+  
+  print(ggplot(data = count_date) + 
+          geom_point (mapping = aes (x=Date, y=Frequency), color=ifelse(count_date$red == 1, "red", "black")) +
+          scale_x_discrete(breaks = count_date$Date[seq(1, length(count_date$Date), by = 10)]) +
+          ggtitle(paste("Listeria Monocytogenes Cases Evolution for SNP Cluster", cluster_name)) +
+          labs(x = 'Date(year-month)', y = 'Frequency'))
+          
+  
+  count_date = count_date[order(-count_date$Frequency),] # order returns indexes 
+  print(sprintf("SNP Cluster %s has the highest cases of listeria monocytogenes at %s", cluster_name, count_date[1,1]))
+}
+```
+
+All the dots in each graph represents the total case of Listeriosis happened in that month. The x-axis represents the year-month information and y-axis represents the total Listeria cases occurred in that month. 
+
+All the red dots in each graph indicates one more information that there is an actual outbreak happened being recorded by the National Center for Biotechnology Information. Surprisingly, it doesn't match my expectations that a month with the highest Listeria cases should indicate an outbreak. 
+
+For clusters PDS000000366.488(1), PDS000024682.133(8), and PDS000024900.112(10), they all had highest cases of Listeriosis at 2020-01. Clusters PDS000024656.169(4) and PDS000032941.132(11) had highest cases of Listeriosis at 2018-09. All the other clusters had the highest cases of the disease at a separate date(year-month). 
+
+
+Next, I am going to visualize the evolution of cases within each SNP cluster for Listeria Monocytogenes with week as an interval unit. For each month, I encoded date 1 to date 7 as the first week; date 8 to date 14 as the second week; date 15 to date 21 as the third week; and the rest of the day within each month as the fourth week. 
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+for (i in 1:10){
+  new_cluster = isolates %>%
+    filter((SNP_cluster == count_SNP_20[i,1]))
+  new_cluster$Create_date = format(as.Date(new_cluster$Create_date), "%Y-%m-%d")
+  new_cluster$Create_date_YM = format(as.Date(new_cluster$Create_date), "%Y-%m")
+  
+  for (j in 1:dim(new_cluster[1])){
+  date = as.numeric(format(as.Date(new_cluster$Create_date[j]), "%d"))
+  new_cluster$week[j] = if(date >= 1 && date <= 7){
+    1
+  } else if(date >= 8 && date <= 14){
+    2
+  } else if(date >= 15 && date <= 21){
+    3
+  } else {
+    4
+  }
+  new_cluster$Create_date_YMW[j] = sprintf("%s-%s", new_cluster$Create_date_YM[j], new_cluster$week[j])
+  }
+  
+  count_date = as.data.frame(table(new_cluster$Create_date_YMW))
+  colnames(count_date)[colnames(count_date) == "Var1"] <- "Date"
+  colnames(count_date)[colnames(count_date) == "Freq"] <- "Frequency"
+  
+  count_date$red = 0
+  for (j in 1:dim(new_cluster)[1]){
+    if(new_cluster$Outbreak[j] == 1){
+      number = which(count_date$Date == noquote(new_cluster$Create_date_YMW[j]))
+      count_date$red[number] = 1
+      }
+    }
+  
+  # print(table(count_date$red))
+  
+  cluster_name = count_SNP_20[i,1]
+  
+  print(ggplot(data = count_date) + 
+          geom_point (mapping = aes (x=Date, y=Frequency), color=ifelse(count_date$red == 1, "red", "black")) +
+          scale_x_discrete(breaks = count_date$Date[seq(1, length(count_date$Date), by = 20)]) +
+          ggtitle(paste("Listeria Monocytogenes Cases Evolution for SNP Cluster", cluster_name)) +
+          labs(x = 'Date(year-month-week)', y = 'Frequency'))
+  
+    
+  count_date = count_date[order(-count_date$Frequency),]  # order returns indexes 
+  print(sprintf("SNP Cluster %s has the highest cases of listeria monocytogenes at %s", cluster_name, count_date[1,1]))
+}
+```
+
+All the dots in each graph represents the total case of Listeriosis happened in that week. The x-axis represents the year-month-week information and y-axis represents the total Listeria cases occurred in that week. 
+
+All the red dots in each graph indicates one more information that there is an actual outbreak happened being recorded by the National Center for Biotechnology Information. It doesn't match my expectations that a week with the highest Listeria cases should indicate an outbreak. 
+
+
+
+# Time Series Analysis for the First SNP Cluster
+
+# Using Monthly Dataset
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+cluster_1 = isolates %>%
+  filter((SNP_cluster == count_SNP_20[1,1]))
+```
+
+We are going to perform time series analysis on the first SNP cluster (PDS000000366.488) first. Since we are using time series models, we don't necessarily need to use other covariates in the dataset, we will going to predict the instances of Listeriosis within a period based on the past values (autoregressive) and the average change in a data series over time (moving average). 
+
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+cluster_1$Create_date_YM = format(as.Date(cluster_1$Create_date), "%Y-%m")
+datatouse = as.data.frame(table(cluster_1$Create_date_YM))
+colnames(datatouse)[colnames(datatouse) == "Var1"] <- "Date"
+colnames(datatouse)[colnames(datatouse) == "Freq"] <- "Frequency"
+datatouse$Date = as.character(datatouse$Date)
+```
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+datatouse[nrow(datatouse)+1,] = c("2013-12", 0)
+datatouse[nrow(datatouse)+1,] = c("2014-02", 0)
+datatouse[nrow(datatouse)+1,] = c("2014-04", 0)
+datatouse[nrow(datatouse)+1,] = c("2021-03", 0)
+datatouse = datatouse[order(datatouse$Date),] 
+rownames(datatouse) <- NULL
+datatouse$Frequency = as.numeric(datatouse$Frequency)
+datatouse[1:10,]
+```
+
+Above table (only 10 rows are showed) records the number of cases of Listeriosis happened in each month from 2013-11 to 2022-06. Months like 2013-12, 2014-02, 2014-04, and 2021-03 without any instances have a 0 value for frequency. 
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+univariate_ts = as.ts(datatouse$Frequency)
+univariate_ts
+```
+
+Then, we convert frequency data in above table to an univariate time series. 
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+ts.plot(univariate_ts, main = 'Evolution of Listeriosis Cases for the First SNP Cluster', ylab = 'Frequency')
+```
+
+Above plot visualizes the evolution of Listeriosis cases for the first SNP cluster(PDS000000366.488). We can clearly see an outlier around time point 75, so that we are going to perform winsorization to alleviate outlier's effect on our time series models. 
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+univariate_ts = Winsorize(univariate_ts)
+ts.plot(univariate_ts, main = 'Evolution of Listeriosis for the First SNP Cluster with Winsorization', ylab = 'Frequency')
+```
+
+Above plot visualizes the same trend but with winsorization performed on the time series. 
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+create_xreg <- function(ds){
+  xreg = model.matrix(~as.factor(ds$Month)) 
+  xreg = xreg[,-1] 
+  colnames(xreg) = c("February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December")
+  return(xreg)
+}
+```
+
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+datatouse$Month = format(as.Date(paste(datatouse$Date,"-01",sep="")), "%m")
+xreg_touse = create_xreg(datatouse)
+xreg_touse[1:10,]
+```
+
+Above matrix (only 10 rows are showed) indicates each observation is from which month. If an observation has 0s for all the columns, then it is from January. This matrix represents all the external regressors (seasonality) we are going to input to the time series models. 
+
+# ARIMA:
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+df <- data.frame(matrix(0, nrow=216, ncol=4))
+colnames(df) = c("p","d","q","RMSD")
+```
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+p = c(0,1,2,3,4,5)
+d = c(0,1,2,3,4,5)
+q = c(0,1,2,3,4,5)
+
+
+count1 = 1
+
+for(a in p){
+    for (b in d){
+      for (c in q){
+                df[count1,3] = c
+                df[count1,2] = b
+                df[count1,1] = a
+                count1 = count1 + 1
+      }
+    }
+}
+```
+
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+for (i in 1:4){
+  start = 1
+  end = i * round(nrow(datatouse)/5)
+  end2 = (i+1) * round(nrow(datatouse)/5)
+  if (end2 > nrow(datatouse)){
+    end2 = dim(datatouse)[1]
+  }
+  datatouse_full_train = datatouse[start:end,]
+  datatouse_full_test = datatouse[(end+1):end2,]
+  
+  datatouse_full_train_f = datatouse_full_train$Frequency
+  datatouse_full_test_t = datatouse_full_test$Frequency
+  
+  univariate_ts_train = as.ts(datatouse_full_train_f)
+  
+
+  xreg_test = create_xreg(datatouse_full_test)
+  
+  
+  for (j in 1:nrow(df)){   
+    p = df[j,1]
+    d = df[j,2]
+    q = df[j,3]
+    mse_list = c()
+    
+    xreg_train = create_xreg(datatouse_full_train)
+    new_model = Arima(univariate_ts_train, order = c(p,d,q), method = "CSS", xreg = xreg_train)
+    
+    
+    datatouse_full_train_f = datatouse_full_train$Frequency
+    
+    for (k in 1:length(datatouse_full_test_t)){
+      predict_model = predict(new_model, n.ahead=1, newxreg = t(xreg_test[k,]))
+      mse_list[k] = (predict_model$pred - datatouse_full_test_t[k])^2
+      datatouse_full_train_f = append(datatouse_full_train_f, datatouse_full_test_t[k])
+      new_data_ts = as.ts(datatouse_full_train_f)
+      xreg_train = rbind(xreg_train, xreg_test[k,])
+      new_model = Arima(new_data_ts, model=new_model, xreg = xreg_train)
+    }
+    
+    mse_value = mean(mse_list)
+    mse_value = sqrt(mse_value)  # RMSD
+    df[j,4] = df[j,4] + mse_value
+  }
+}
+
+df = df %>%
+  mutate(RMSD = RMSD/4)
+```
+
+We were going to use ARIMA model first to model the evolution of cases for Listeriosis. The ARIMA model consists of three parts: AR, I, and MA. The "AR" stands for autoregression, where we predict something based on past values of that same thing. The "I" stands for integrated, and it represents the differencing in time series. The "MA" stands for moving average, where the next observation is the mean of every past observation. In order to account for seasonality, we supplied monthly information for each observation in the xreg matrix. We performed nested cross validation to choose the best hyperparameters (p, d, and q) for the ARIMA model. We used exhaustive grid search algorithm to perform nested cross validation, where we created total 216 models between different combinations of p, d, and q. The possible values for p, d, and q are 0, 1, 2, 3, 4, and 5 (total 216 models being evaluated). 
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+min(df$RMSD)
+```
+
+The best model with the lowest root-mean-square deviation (RMSD) is the model with p = 0, d = 1, and q = 2. The RMSD for this ARIMA model is 22.21 and it is calculated based on the test set. After we finished training the model, for all the observations in the test set, each time we made one-step forward prediction and compared it with the value in the test set. Then, we updated our model with this new test set observation(without re-estimating the coefficients) and made the next one-step forward prediction. 
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+final_arima = Arima(univariate_ts, order = c(0,1,2), xreg = xreg_touse)
+final_arima$coef
+```
+
+Above values are the coefficients for the best ARIMA model chosen by nested cross validation using monthly dataset for the first SNP cluster (PDS000000366.488). 
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+ts.plot(univariate_ts)
+final_arima_fit = univariate_ts - residuals(final_arima)
+points(final_arima_fit, type = "l", col=2, lty=2)
+title(main = "Actual Time Series vs. Fitted Time Series")
+```
+
+Above graph shows the evolution for the actual time series (the black line) and the fitted time series (the red line). The x-axis represent different time points, where each tick value represent a month. The y-axis represents total cases for that particular month. 
+
+
+
+# GARIMA:
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+create_gsarima <- function(ts,p,q,x){
+  if (p==0 & q==0){
+    new_gsarima = tsglm(ts, model = list(), distr = "nbinom", xreg = x)
+  }
+  else if (p==0){
+    new_gsarima = tsglm(ts, model = list(past_mean = 1:q), distr = "nbinom", xreg = x)
+  }
+  else if (q==0){
+    new_gsarima = tsglm(ts, model = list(past_obs = 1:p), distr = "nbinom", xreg = x)
+  } else {
+    new_gsarima = tsglm(ts, model = list(past_obs = 1:p, past_mean = 1:q), distr = "nbinom", xreg = x)
+  }
+  return(new_gsarima)
+}
+```
+
+Next, we are going to use generalized ARIMA(GARIMA) model to model the evolution of cases for Listeriosis. GARIMA doesn't have the assumption that all the observations need to come from the normal distribution, so that it is more flexible. Here, we specify that all the observations are coming from the negative binomial distribution. Xreg matrix and nested cross validation procedure are the same compared to the ARIMA model. We use xreg matrix to account for seasonality and nested cross validation to select best values for hyperparameters. The best GARIMA model is chosen using the lowest RMSD, which is calculated the same way described earlier in the ARIMA section (one step forward prediction is made and compared to the test set then add to the original model without re-estimating the coefficients). 
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+df2 <- data.frame(matrix(0, nrow=36, ncol=3))
+colnames(df2) = c("p","q","RMSD")
+```
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+pp = c(0,1,2,3,4,5)
+qq = c(0,1,2,3,4,5)
+
+count = 1
+
+for (a in pp){
+  for (b in qq){
+    df2[count,1] = a
+    df2[count,2] = b
+    count = count + 1
+  }
+}
+```
+
+
+
+```{r, message=FALSE, warning = FALSE, echo = FALSE}
+for (i in 1:4){
+  start = 1
+  end = i * round(nrow(datatouse)/5)
+  end2 = (i+1) * round(nrow(datatouse)/5)
+  if (end2 > nrow(datatouse)){
+    end2 = dim(datatouse)[1]
+  }
+  datatouse_full_train = datatouse[start:end,]
+  datatouse_full_test = datatouse[(end+1):end2,]
+  
+  univariate_ts_train = as.ts(datatouse_full_train$Frequency)
+  
+  xreg_train = create_xreg(datatouse_full_train)
+  xreg_test = create_xreg(datatouse_full_test)
+  
+  
+  for (i in 1:nrow(df2)){
+    p = df2[i,1]
+    q = df2[i,2]
+    gsarima = create_gsarima(univariate_ts_train, p, q, xreg_train)
+    predict_model = predict(gsarima, n.ahead = nrow(datatouse_full_test), newobs = datatouse_full_test$Frequency, newxreg = xreg_test)
+    mse_value = mean((predict_model$pred - datatouse_full_test$Frequency)^2)
+    mse_value = sqrt(mse_value)
+    df2[i,3] = df2[i,3] + mse_value
+  }
+}
+
+df2 = df2 %>%
+  mutate(RMSD = RMSD/4)
+```
+
+
+```{r, message=FALSE, warning = FALSE, echo = FALSE}
+min(df2$RMSD)
+```
+
+The GARIMA model with the lowest RMSD has p = 5 and q = 2 (The possible values for p and q are 0, 1, 2, 3, 4, and 5; total 36 models being evaluated). This is our final GARIMA model using the monthly dataset for the first SNP cluster. 
+
+
+```{r, message=FALSE, warning = FALSE, echo = FALSE}
+final_garima = create_gsarima(univariate_ts, 5, 2, xreg_touse)
+final_garima$coefficients
+```
+
+Above are the coefficients for the final GARIMA model. 
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+ts.plot(univariate_ts)
+final_garima_fit = univariate_ts - residuals(final_garima)
+points(final_garima_fit, type = "l", col=2, lty=2)
+title(main = "Actual Time Series vs. Fitted Time Series")
+```
+
+Above graph shows the evolution for the actual time series (the black line) and the fitted time series (output from the final GARIMA model). The x-axis represent different time points, where each tick value represent a month. The y-axis represents total cases for that particular month. 
+
+
+# Using Weekly Dataset
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+cluster_1$Create_date = format(as.Date(cluster_1$Create_date), "%Y-%m-%d")
+cluster_1$Create_date_YM = format(as.Date(cluster_1$Create_date), "%Y-%m")
+```
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+for (i in 1:dim(cluster_1[1])){
+  date = as.numeric(format(as.Date(cluster_1$Create_date[i]), "%d"))
+  cluster_1$week[i] = if(date >= 1 && date <= 7){
+    1
+  } else if(date >= 8 && date <= 14){
+    2
+  } else if(date >= 15 && date <= 21){
+    3
+  } else {
+    4
+  } 
+  cluster_1$Create_date_YMW[i] = sprintf("%s-%s", cluster_1$Create_date_YM[i], cluster_1$week[i])
+}
+```
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+datatouse2 = as.data.frame(table(cluster_1$Create_date_YMW))
+colnames(datatouse2)[colnames(datatouse2) == "Var1"] <- "Date(YMW)"
+colnames(datatouse2)[colnames(datatouse2) == "Freq"] <- "Frequency"
+datatouse2$`Date(YMW)` = as.character(datatouse2$Date)
+```
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+datatouse2[nrow(datatouse2)+1,] = c("2013-11-4", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2013-12-1", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2013-12-2", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2013-12-3", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2013-12-4", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2014-01-2", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2014-01-3", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2014-02-1", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2014-02-2", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2014-02-3", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2014-02-4", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2014-03-1", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2014-04-1", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2014-04-2", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2014-04-3", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2014-04-4", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2014-05-3", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2014-05-4", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2014-07-4", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2014-09-1", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2014-09-3", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2014-10-3", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2014-11-1", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2014-11-2", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2014-11-3", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2014-12-2", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2014-12-3", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2014-12-4", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2015-01-2", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2015-01-3", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2015-01-4", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2015-02-1", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2015-03-2", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2015-03-3", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2015-03-4", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2015-04-1", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2015-04-3", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2015-06-2", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2015-08-1", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2015-08-3", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2015-09-1", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2015-09-2", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2015-09-3", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2016-02-2", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2016-04-2", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2016-05-4", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2016-10-1", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2016-10-2", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2017-01-2", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2017-02-2", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2017-03-2", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2017-07-1", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2017-07-3", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2017-08-3", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2017-09-2", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2017-10-2", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2017-11-1", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2017-12-2", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2018-01-3", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2018-03-2", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2018-04-2", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2018-05-1", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2018-07-1", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2018-07-2", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2018-08-1", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2018-10-2", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2019-01-3", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2019-02-2", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2019-05-2", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2019-05-3", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2019-06-2", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2019-06-3", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2019-06-4", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2019-07-1", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2019-07-2", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2019-08-1", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2019-10-1", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2019-12-3", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2020-01-1", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2020-01-3", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2020-02-3", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2020-03-1", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2020-03-2", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2020-04-2", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2020-04-3", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2020-04-4", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2020-05-1", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2020-05-3", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2020-05-4", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2020-06-2", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2020-06-3", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2020-07-1", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2020-07-4", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2020-08-1", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2020-08-2", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2020-08-3", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2020-09-4", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2020-10-2", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2020-11-1", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2020-11-3", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2020-11-4", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2020-12-1", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2020-12-2", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2020-12-3", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2021-01-1", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2021-01-2", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2021-01-3", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2021-02-4", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2021-03-1", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2021-03-2", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2021-03-3", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2021-03-4", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2021-04-4", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2021-05-4", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2021-06-4", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2021-07-2", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2021-07-3", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2021-08-2", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2021-09-2", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2021-09-4", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2021-10-2", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2021-10-3", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2021-11-4", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2021-12-2", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2021-12-4", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2022-02-3", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2022-03-2", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2022-04-1", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2022-04-2", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2022-05-1", 0)
+datatouse2[nrow(datatouse2)+1,] = c("2022-05-3", 0)
+
+
+datatouse2 = datatouse2[order(datatouse2$Date),] 
+rownames(datatouse2) <- NULL
+datatouse2$Frequency = as.numeric(datatouse2$Frequency)
+datatouse2[1:10,]
+```
+
+After analyzing the first cluster using monthly data, we are going to use weekly data to compared the results. For each month, we coded date 1 to date 7 as the first week; date 8 to date 14 as the second week; date 15 to date 21 as the third week; and the rest of the days within each month as the fourth week. Above table shows the first 10 observations after we converted monthly data to weekly data. Each row of the column 'Frequency' now represents the total cases of Listeriosis occurred in that week. 
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+univariate_ts2 = as.ts(datatouse2$Frequency)
+univariate_ts2 = Winsorize(univariate_ts2)
+univariate_ts2
+```
+
+Then, we converted weekly data of Listeriosis cases to an univariate time series. We also performed winsorization to alleviate the effect of outliers. 
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+ts.plot(univariate_ts2, main = 'Evolution of Listeriosis for the First SNP Cluster using Weekly Data', ylab = 'Frequency')
+```
+
+Above plot visualizes the evolution of Listeriosis cases for the first SNP cluster(PDS000000366.488) using weekly data (after winsorization). 
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+datatouse2$Month = format(as.Date(datatouse2$`Date(YMW)`), "%m")
+xreg_touse2 = create_xreg(datatouse2)
+xreg_touse2[1:10,]
+```
+
+Above matrix (only ten rows are showed) indicates each observation is from which month. If an observation has 0s for all the columns, then it is from January. This matrix represents all the external regressors (seasonality) we are going to input to the time series models. 
+
+# ARIMA 
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+df3 <- data.frame(matrix(0, nrow=216, ncol=4))
+colnames(df3) = c("p","d","q","RMSD")
+```
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+p = c(0,1,2,3,4,5)
+d = c(0,1,2,3,4,5)
+q = c(0,1,2,3,4,5)
+
+
+count1 = 1
+
+for(a in p){
+    for (b in d){
+      for (c in q){
+                df3[count1,3] = c
+                df3[count1,2] = b
+                df3[count1,1] = a
+                count1 = count1 + 1
+      }
+    }
+}
+```
+
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+for (i in 1:4){
+  start = 1
+  end = i * round(nrow(datatouse2)/5)
+  end2 = (i+1) * round(nrow(datatouse2)/5)
+  if (end2 > nrow(datatouse2)){
+    end2 = dim(datatouse2)[1]
+  }
+  datatouse_full_train = datatouse2[start:end,]
+  datatouse_full_test = datatouse2[(end+1):end2,]
+  
+  datatouse_full_train_f = datatouse_full_train$Frequency
+  datatouse_full_test_t = datatouse_full_test$Frequency
+  
+  univariate_ts_train = as.ts(datatouse_full_train_f)
+  
+
+  xreg_test = create_xreg(datatouse_full_test)
+  
+  
+  for (j in 1:nrow(df3)){   
+    p = df3[j,1]
+    d = df3[j,2]
+    q = df3[j,3]
+    mse_list = c()
+    
+    xreg_train = create_xreg(datatouse_full_train)
+    new_model = Arima(univariate_ts_train, order = c(p,d,q), method = "CSS", xreg = xreg_train)
+    
+    
+    datatouse_full_train_f = datatouse_full_train$Frequency
+    
+    for (k in 1:length(datatouse_full_test_t)){
+      predict_model = predict(new_model, n.ahead=1, newxreg = t(xreg_test[k,]))
+      mse_list[k] = (predict_model$pred - datatouse_full_test_t[k])^2
+      datatouse_full_train_f = append(datatouse_full_train_f, datatouse_full_test_t[k])
+      new_data_ts = as.ts(datatouse_full_train_f)
+      xreg_train = rbind(xreg_train, xreg_test[k,])
+      new_model = Arima(new_data_ts, model=new_model, xreg = xreg_train)
+    }
+    
+    mse_value = mean(mse_list)
+    mse_value = sqrt(mse_value)  # RMSD
+    df3[j,4] = df3[j,4] + mse_value
+  }
+}
+
+df3 = df3 %>%
+  mutate(RMSD = RMSD/4)
+```
+
+In the ARIMA model building part using weekly dataset for the first SNP cluster, we followed the same logic described earlier. We still used nest-cross validation with grid search, xreg matrix and RMSD to choose the model with the best performance. 
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+min(df3$RMSD)
+```
+
+The model with the lowest RMSD(9.969139) has hyperparameters: p = 0, d = 1, and q = 1 (The possible values for p, d, and q are 0, 1, 2, 3, 4, and 5; total 216 models being evaluated).  
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+final_arima_weekly = Arima(univariate_ts2, order = c(0,1,1), xreg = xreg_touse2)
+final_arima_weekly$coef
+```
+
+Above table shows the coefficients for the best-performing ARIMA model. 
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+ts.plot(univariate_ts2)
+final_arima_fit2 = univariate_ts2 - residuals(final_arima_weekly)
+points(final_arima_fit2, type = "l", col=2, lty=2)
+title(main = "Actual Time Series vs. Fitted Time Series")
+```
+
+Above graph shows the evolution for the actual time series (the black line) and the fitted time series (output from the final ARIMA model). The x-axis represent different time points, where each tick value represent a week. The y-axis represents total cases for that particular week. 
+
+
+# GARIMA
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+df4 <- data.frame(matrix(0, nrow=36, ncol=3))
+colnames(df4) = c("p","q","RMSD")
+```
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+pp = c(0,1,2,3,4,5)
+qq = c(0,1,2,3,4,5)
+
+count = 1
+
+for (a in pp){
+  for (b in qq){
+    df4[count,1] = a
+    df4[count,2] = b
+    count = count + 1
+  }
+}
+```
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+for (i in 1:4){
+  start = 1
+  end = i * round(nrow(datatouse2)/5)
+  end2 = (i+1) * round(nrow(datatouse2)/5)
+  if (end2 > nrow(datatouse2)){
+    end2 = dim(datatouse2)[1]
+  }
+  datatouse_full_train = datatouse2[start:end,]
+  datatouse_full_test = datatouse2[(end+1):end2,]
+  
+  univariate_ts_train = as.ts(datatouse_full_train$Frequency)
+  
+  xreg_train = create_xreg(datatouse_full_train)
+  xreg_test = create_xreg(datatouse_full_test)
+  
+  
+  for (i in 1:nrow(df4)){
+    p = df4[i,1]
+    q = df4[i,2]
+    gsarima = create_gsarima(univariate_ts_train, p, q, xreg_train)
+    predict_model = predict(gsarima, n.ahead = nrow(datatouse_full_test), newobs = datatouse_full_test$Frequency, newxreg = xreg_test)
+    mse_value = mean((predict_model$pred - datatouse_full_test$Frequency)^2)
+    mse_value = sqrt(mse_value)
+    df4[i,3] = df4[i,3] + mse_value
+  }
+}
+
+df4 = df4 %>%
+  mutate(RMSD = RMSD/4)
+```
+
+In the GARIMA model building part using weekly dataset for the first SNP cluster, we followed the same logic described earlier. We still used nest-cross validation with grid search, xreg matrix and RMSD to choose the model with the best performance. 
+
+
+```{r, message=FALSE, warning = FALSE, echo = FALSE}
+min(df4$RMSD)
+```
+
+The model with the lowest RMSD(9.848444) has hyperparameters: p = 1 and q = 3 (The possible values for p and q are 0, 1, 2, 3, 4, and 5; total 36 models being evaluated).
+
+
+```{r, message=FALSE, warning = FALSE, echo = FALSE}
+final_garima_weekly = create_gsarima(univariate_ts2, 1, 3, xreg_touse2)
+final_garima_weekly$coefficients
+```
+
+Above table shows the coefficients for the best-performing GARIMA model.
+
+
+```{r, message=FALSE, warning = FALSE, echo = FALSE}
+ts.plot(univariate_ts2)
+final_garima_fit2 = univariate_ts2 - residuals(final_garima_weekly)
+points(final_garima_fit2, type = "l", col=2, lty=2)
+title(main = "Actual Time Series vs. Fitted Time Series")
+```
+
+Above graph shows the evolution for the actual time series (the black line) and the fitted time series (output from the final GARIMA model). The x-axis represent different time points, where each tick value represent a week. The y-axis represents total cases for that particular week. 
+
+
+# Time Series Analysis Using the Full Dataset
+
+# Using Monthly Version Dataset
+
+```{r, message=FALSE, warning = FALSE, echo = FALSE}
+isolates$Create_date_YM = format(as.Date(isolates$Create_date), "%Y-%m")
+datatouse_full = as.data.frame(table(isolates$Create_date_YM))
+colnames(datatouse_full)[colnames(datatouse_full) == "Var1"] <- "Date"
+colnames(datatouse_full)[colnames(datatouse_full) == "Freq"] <- "Frequency"
+datatouse_full$Date = as.character(datatouse_full$Date)
+datatouse_full = datatouse_full[15:nrow(datatouse_full),]
+rownames(datatouse_full) = NULL
+datatouse_full[1:10,]
+
+datatouse_full$Frequency = datatouse_full$Frequency / 100
+datatouse_full$Frequency = round(datatouse_full$Frequency)
+```
+
+After analyzing the first SNP cluster, we are going to build time series models on the monthly version of the full dataset to try to model evolution of Listeriosis cases over time. Above table shows the first 10 rows of the monthly version dataset (contains all the SNP clusters, not just the first one). Column 'Frequency' indicates total cases of Listeriosis occurred in that month.
+
+
+```{r, message=FALSE, warning = FALSE, echo = FALSE}
+datatouse_full$Month = format(as.Date(paste(datatouse_full$Date,"-01",sep="")), "%m")
+datatouse_full[1:10,]
+```
+
+For the column 'Frequency', we converted the unit to hundreds. For example, for date 2013-11, the frequency is 3, which means that there were approximately a total of 300 cases of Listeriosis happened in that month. The reason we converted the unit to hundreds is to rescale the data so that models are able to converge. 
+
+
+```{r, message=FALSE, warning = FALSE, echo = FALSE}
+univariate_ts3 = as.ts(datatouse_full$Frequency)
+univariate_ts3 = Winsorize(univariate_ts3)
+univariate_ts3
+```
+
+Then, we converted the column 'Frequency' to an univariate time series and performed winsorization. 
+
+```{r, message=FALSE, warning = FALSE, echo = FALSE}
+ts.plot(univariate_ts3, main = 'Evolution of Listeriosis for the Whole Dataset with Winsorization', ylab = 'Frequency (per hundreds)')
+```
+
+Above plot visualizes the evolution of Listeriosis cases for the monthly version full dataset after winsorization (including all SNP clusters). 
+
+
+```{r, message=FALSE, warning = FALSE, echo = FALSE}
+datatouse_full$Month = format(as.Date(paste(datatouse_full$Date,"-01",sep="")), "%m")
+xreg_touse_full = create_xreg(datatouse_full)
+xreg_touse_full[1:10,]
+```
+
+Above xreg matrix (only 10 rows are showed) indicates each observation is from which month. If an observation has 0s for all the columns, then it is from January. This matrix represents all the external regressors (seasonality) we are going to input to the time series models. 
+
+
+# ARIMA 
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+df5 <- data.frame(matrix(0, nrow=216, ncol=4))
+colnames(df5) = c("p","d","q","RMSD")
+```
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+p = c(0,1,2,3,4,5)
+d = c(0,1,2,3,4,5)
+q = c(0,1,2,3,4,5)
+
+
+count1 = 1
+
+for(a in p){
+    for (b in d){
+      for (c in q){
+                df5[count1,3] = c
+                df5[count1,2] = b
+                df5[count1,1] = a
+                count1 = count1 + 1
+      }
+    }
+}
+```
+
+
+
+
+```{r echo = FALSE, message=FALSE, warning=FALSE}
+for (i in 1:4){
+  start = 1
+  end = i * round(nrow(datatouse_full)/5)
+  end2 = (i+1) * round(nrow(datatouse_full)/5)
+  if (end2 > nrow(datatouse_full)){
+    end2 = dim(datatouse_full)[1]
+  }
+  datatouse_full_train = datatouse_full[start:end,]
+  datatouse_full_test = datatouse_full[(end+1):end2,]
+  
+  datatouse_full_train_f = datatouse_full_train$Frequency
+  datatouse_full_test_t = datatouse_full_test$Frequency
+  
+  univariate_ts_train = as.ts(datatouse_full_train_f)
+  
+
+  xreg_test = create_xreg(datatouse_full_test)
+  
+  
+  for (j in 1:nrow(df5)){   
+    p = df5[j,1]
+    d = df5[j,2]
+    q = df5[j,3]
+    mse_list = c()
+    
+    xreg_train = create_xreg(datatouse_full_train)
+    new_model = Arima(univariate_ts_train, order = c(p,d,q), method = "CSS", xreg = xreg_train)
+    
+    
+    datatouse_full_train_f = datatouse_full_train$Frequency
+    
+    for (k in 1:length(datatouse_full_test_t)){
+      predict_model = predict(new_model, n.ahead=1, newxreg = t(xreg_test[k,]))
+      mse_list[k] = (predict_model$pred - datatouse_full_test_t[k])^2
+      datatouse_full_train_f = append(datatouse_full_train_f, datatouse_full_test_t[k])
+      new_data_ts = as.ts(datatouse_full_train_f)
+      xreg_train = rbind(xreg_train, xreg_test[k,])
+      new_model = Arima(new_data_ts, model=new_model, xreg = xreg_train)
+    }
+    
+    mse_value = mean(mse_list)
+    mse_value = sqrt(mse_value)  # RMSD
+    df5[j,4] = df5[j,4] + mse_value
+  }
+}
+
+df5 = df5 %>%
+  mutate(RMSD = RMSD/4)
+```
+
+The first model we are trying to build using the monthly version full dataset is the ARIMA model. The procedure is the same. We use nested cross validation with grid search, xreg matrix and RMSD to choose the best-performing ARIMA model. 
+
+
+```{r echo = FALSE, message=FALSE, warning=FALSE}
+min(df5$RMSD)
+```
+
+The ARIMA model with the lowest RMSD has a value of 4.657219. The p, d, and q for that model are 0, 1, and 1 respectively (The possible values for p, d, and q are 0, 1, 2, 3, 4, and 5; total 216 models being evaluated). 
+
+
+```{r echo = FALSE, message=FALSE, warning=FALSE}
+final_arima_full = Arima(univariate_ts3, order = c(0,1,1), xreg = xreg_touse_full)
+final_arima_full$coef
+```
+
+Above table shows the coefficients for the best-performing ARIMA model. 
+
+
+```{r echo = FALSE, message=FALSE, warning=FALSE}
+ts.plot(univariate_ts3)
+final_arima_fit3 = univariate_ts3 - residuals(final_arima_full)
+points(final_arima_fit3, type = "l", col=2, lty=2)
+title(main = "Actual Time Series vs. Fitted Time Series")
+```
+
+Above graph shows the evolution for the actual time series (the black line) and the fitted time series (output from the final ARIMA model). The x-axis represent different time points, where each tick value represents a month. The y-axis represents total cases for that particular month and the unit is in hundreds. 
+
+# GARIMA 
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+df6 <- data.frame(matrix(0, nrow=36, ncol=3))
+colnames(df6) = c("p","q","RMSD")
+```
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+pp = c(0,1,2,3,4,5)
+qq = c(0,1,2,3,4,5)
+
+count = 1
+
+for (a in pp){
+  for (b in qq){
+    df6[count,1] = a
+    df6[count,2] = b
+    count = count + 1
+  }
+}
+```
+
+
+
+```{r, message=FALSE, warning = FALSE, echo = FALSE}
+for (i in 1:4){
+  start = 1
+  end = i * round(nrow(datatouse_full)/5)
+  end2 = (i+1) * round(nrow(datatouse_full)/5)
+  if (end2 > nrow(datatouse_full)){
+    end2 = dim(datatouse_full)[1]
+  }
+  datatouse_full_train = datatouse_full[start:end,]
+  datatouse_full_test = datatouse_full[(end+1):end2,]
+  
+  univariate_ts_train = as.ts(datatouse_full_train$Frequency)
+  
+  xreg_train = create_xreg(datatouse_full_train)
+  xreg_test = create_xreg(datatouse_full_test)
+  
+  
+  for (i in 1:nrow(df6)){
+    p = df6[i,1]
+    q = df6[i,2]
+    gsarima = create_gsarima(univariate_ts_train, p, q, xreg_train)
+    predict_model = predict(gsarima, n.ahead = nrow(datatouse_full_test), newobs = datatouse_full_test$Frequency, newxreg = xreg_test)
+    mse_value = mean((predict_model$pred - datatouse_full_test$Frequency)^2)
+    mse_value = sqrt(mse_value)
+    df6[i,3] = df6[i,3] + mse_value
+  }
+}
+
+df6 = df6 %>%
+  mutate(RMSD = RMSD/4)
+```
+
+Then, we try to use the monthly version of the full dataset to build GARIMA models. The procedure is the same. We use nested cross validation with grid search, xreg matrix and RMSD to choose the best-performing GARIMA model.  
+
+
+```{r, message=FALSE, warning = FALSE, echo = FALSE}
+min(df6$RMSD)
+```
+
+The GARIMA model with the lowest RMSD has a value of 4.637046. The p and q for that model are 1 and 2 respectively (The possible values for p and q are 0, 1, 2, 3, 4, and 5; total 36 models being evaluated).
+
+```{r, message=FALSE, warning = FALSE, echo = FALSE}
+final_garima_full = create_gsarima(univariate_ts3, 1, 2, xreg_touse_full)
+final_garima_full$coefficients
+```
+
+Above table shows the coefficients for the best-performing GARIMA model. 
+
+```{r, message=FALSE, warning = FALSE, echo = FALSE}
+ts.plot(univariate_ts3)
+final_garima_fit3 = univariate_ts3 - residuals(final_garima_full)
+points(final_garima_fit3, type = "l", col=2, lty=2)
+title(main = "Actual Time Series vs. Fitted Time Series")
+```
+
+Above graph shows the evolution for the actual time series (the black line) and the fitted time series (output from the final GARIMA model). The x-axis represent different time points, where each tick value represents a month. The y-axis represents total cases for that particular month and the unit is in hundreds.
+
+
+# Using Weekly Version Dataset
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+isolates$Create_date = format(as.Date(isolates$Create_date), "%Y-%m-%d")
+isolates$Create_date_YM = format(as.Date(isolates$Create_date), "%Y-%m")
+```
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+for (i in 1:dim(isolates[1])){
+  date = as.numeric(format(as.Date(isolates$Create_date[i]), "%d"))
+  isolates$week[i] = if(date >= 1 && date <= 7){
+    1
+  } else if(date >= 8 && date <= 14){
+    2
+  } else if(date >= 15 && date <= 21){
+    3
+  } else {
+    4
+  } 
+  isolates$Create_date_YMW[i] = sprintf("%s-%s", isolates$Create_date_YM[i], isolates$week[i])
+}
+```
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+datatouse2_full = as.data.frame(table(isolates$Create_date_YMW))
+colnames(datatouse2_full)[colnames(datatouse2_full) == "Var1"] <- "Date(YMW)"
+colnames(datatouse2_full)[colnames(datatouse2_full) == "Freq"] <- "Frequency"
+datatouse2_full$`Date(YMW)` = as.character(datatouse2_full$Date)
+```
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+datatouse2_full = datatouse2_full[17:nrow(datatouse2_full),]
+datatouse2_full[nrow(datatouse2_full)+1,] = c("2013-11-4", 0)
+datatouse2_full[nrow(datatouse2_full)+1,] = c("2013-12-1", 0)
+datatouse2_full = datatouse2_full[order(datatouse2_full$`Date(YMW)`),]
+rownames(datatouse2_full) <- NULL
+datatouse2_full[1:10,]
+```
+
+Next, we are going to build ARIMA and GARIMA models again on the weekly version of the full dataset to try to model evolution of Listeriosis cases over time. Above table shows the first 10 rows of the weekly version dataset (contains all the SNP clusters, not just the first one). Column 'Date(YMW)' contains date information in year-month-week format. Column 'Frequency' indicates total cases of Listeriosis occurred in that week.
+
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+datatouse2_full$Frequency = as.numeric(datatouse2_full$Frequency)
+datatouse2_full$Month = format(as.Date(datatouse2_full$`Date(YMW)`), "%m")
+datatouse2_full$Frequency = datatouse2_full$Frequency / 10
+datatouse2_full$Frequency = round(datatouse2_full$Frequency)
+datatouse2_full[1:10,]
+```
+
+For the column 'Frequency', we converted the unit to tens. For example, for date 2013-11-3, the frequency is 28, which means that there were approximately a total of 280 cases of Listeriosis happened in that week. The reason we converted the unit to tens is to rescale the data so that models are able to converge. 
+
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+univariate_ts4 = as.ts(datatouse2_full$Frequency)
+univariate_ts4 = Winsorize(univariate_ts4)
+univariate_ts4
+```
+
+Then, we converted the column 'Frequency' to an univariate time series and performed winsorization. 
+
+
+```{r, message=FALSE, warning = FALSE, echo = FALSE}
+ts.plot(univariate_ts4, main = 'Evolution of Listeriosis for the Whole Dataset with Winsorization', ylab = 'Frequency (per tens)')
+```
+
+Above plot visualizes the evolution of Listeriosis cases for the weekly version full dataset after winsorization (including all SNP clusters). 
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+xreg_touse_full2 = create_xreg(datatouse2_full)
+xreg_touse_full2[1:10,]
+```
+
+Above xreg matrix (only 10 rows are showed) indicates each observation is from which month. If an observation has 0s for all the columns, then it is from January. This matrix represents all the external regressors (seasonality) we are going to input to the time series models.
+
+
+# ARIMA 
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+df7 <- data.frame(matrix(0, nrow=216, ncol=4))
+colnames(df7) = c("p","d","q","RMSD")
+```
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+p = c(0,1,2,3,4,5)
+d = c(0,1,2,3,4,5)
+q = c(0,1,2,3,4,5)
+
+
+count1 = 1
+
+for(a in p){
+    for (b in d){
+      for (c in q){
+                df7[count1,3] = c
+                df7[count1,2] = b
+                df7[count1,1] = a
+                count1 = count1 + 1
+      }
+    }
+}
+```
+
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+for (i in 1:4){
+  start = 1
+  end = i * round(nrow(datatouse2_full)/5)
+  end2 = (i+1) * round(nrow(datatouse2_full)/5)
+  if (end2 > nrow(datatouse2_full)){
+    end2 = dim(datatouse2_full)[1]
+  }
+  datatouse_full_train = datatouse2_full[start:end,]
+  datatouse_full_test = datatouse2_full[(end+1):end2,]
+  
+  datatouse_full_train_f = datatouse_full_train$Frequency
+  datatouse_full_test_t = datatouse_full_test$Frequency
+  
+  univariate_ts_train = as.ts(datatouse_full_train_f)
+  
+
+  xreg_test = create_xreg(datatouse_full_test)
+  
+  
+  for (j in 1:nrow(df7)){   
+    p = df7[j,1]
+    d = df7[j,2]
+    q = df7[j,3]
+    mse_list = c()
+    
+    xreg_train = create_xreg(datatouse_full_train)
+    new_model = Arima(univariate_ts_train, order = c(p,d,q), method = "CSS", xreg = xreg_train)
+    
+    
+    datatouse_full_train_f = datatouse_full_train$Frequency
+    
+    for (k in 1:length(datatouse_full_test_t)){
+      predict_model = predict(new_model, n.ahead=1, newxreg = t(xreg_test[k,]))
+      mse_list[k] = (predict_model$pred - datatouse_full_test_t[k])^2
+      datatouse_full_train_f = append(datatouse_full_train_f, datatouse_full_test_t[k])
+      new_data_ts = as.ts(datatouse_full_train_f)
+      xreg_train = rbind(xreg_train, xreg_test[k,])
+      new_model = Arima(new_data_ts, model=new_model, xreg = xreg_train)
+    }
+    
+    mse_value = mean(mse_list)
+    mse_value = sqrt(mse_value)  # RMSD
+    df7[j,4] = df7[j,4] + mse_value
+  }
+}
+
+df7 = df7 %>%
+  mutate(RMSD = RMSD/4)
+```
+
+The first model we are trying to build using the weekly version of the full dataset is the ARIMA model. The procedure is the same. We use nested cross validation with grid search, xreg matrix and RMSD to choose the best-performing ARIMA model. 
+
+
+```{r, message=FALSE, warning = FALSE, echo = FALSE}
+min(df7$RMSD)
+```
+
+The ARIMA model with the lowest RMSD has a value of 21.99127. The p, d, and q for that model are 1, 1, and 3 respectively (The possible values for p, d, and q are 0, 1, 2, 3, 4, and 5; total 216 models being evaluated). 
+
+
+```{r, message=FALSE, warning = FALSE, echo = FALSE}
+final_arima_full_weekly = Arima(univariate_ts4, order = c(1,1,3), xreg = xreg_touse_full2)
+final_arima_full_weekly$coef
+```
+
+Above table shows the coefficients for the best-performing ARIMA model. 
+
+
+```{r, message=FALSE, warning = FALSE, echo = FALSE}
+ts.plot(univariate_ts4)
+final_arima_full_weekly_fit = univariate_ts4 - residuals(final_arima_full_weekly)
+points(final_arima_full_weekly_fit, type = "l", col=2, lty=2)
+title(main = "Actual Time Series vs. Fitted Time Series")
+```
+
+Above graph shows the evolution for the actual time series (the black line) and the fitted time series (output from the final ARIMA model). The x-axis represent different time points, where each tick value represents a week. The y-axis represents total cases for that particular week and the unit is in tens. 
+
+
+# GARIMA
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+df8 <- data.frame(matrix(0, nrow=36, ncol=3))
+colnames(df8) = c("p","q","RMSD")
+```
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+pp = c(0,1,2,3,4,5)
+qq = c(0,1,2,3,4,5)
+
+count = 1
+
+for (a in pp){
+  for (b in qq){
+    df8[count,1] = a
+    df8[count,2] = b
+    count = count + 1
+  }
+}
+```
+
+
+```{r, message=FALSE, warning = FALSE, echo = FALSE}
+for (i in 1:4){
+  start = 1
+  end = i * round(nrow(datatouse2_full)/5)
+  end2 = (i+1) * round(nrow(datatouse2_full)/5)
+  if (end2 > nrow(datatouse2_full)){
+    end2 = dim(datatouse2_full)[1]
+  }
+  datatouse_full_train = datatouse2_full[start:end,]
+  datatouse_full_test = datatouse2_full[(end+1):end2,]
+  
+  univariate_ts_train = as.ts(datatouse_full_train$Frequency)
+  
+  xreg_train = create_xreg(datatouse_full_train)
+  xreg_test = create_xreg(datatouse_full_test)
+  
+  
+  for (i in 1:nrow(df8)){
+    p = df8[i,1]
+    q = df8[i,2]
+    gsarima = create_gsarima(univariate_ts_train, p, q, xreg_train)
+    predict_model = predict(gsarima, n.ahead = nrow(datatouse_full_test), newobs = datatouse_full_test$Frequency, newxreg = xreg_test)
+    mse_value = mean((predict_model$pred - datatouse_full_test$Frequency)^2)
+    mse_value = sqrt(mse_value)
+    df8[i,3] = df8[i,3] + mse_value
+  }
+}
+
+df8 = df8 %>%
+  mutate(RMSD = RMSD/4)
+```
+
+Then, we try to use the weekly version of the full dataset to build GARIMA models. The procedure is the same. We used nested cross validation with grid search, xreg matrix and RMSD to choose the best-performing GARIMA model.
+
+
+
+```{r, message=FALSE, warning = FALSE, echo = FALSE}
+min(df8$RMSD)
+```
+
+The GARIMA model with the lowest RMSD has a value of 22.22489. The p and q for that model are 2 and 2 respectively (The possible values for p and q are 0, 1, 2, 3, 4, and 5; total 36 models being evaluated).
+
+
+```{r, message=FALSE, warning = FALSE, echo = FALSE}
+final_garima_full_weekly = create_gsarima(univariate_ts4, 2, 2, xreg_touse_full2)
+final_garima_full_weekly$coefficients
+```
+
+Above table shows the coefficients for the best-performing GARIMA model. 
+
+
+```{r, message=FALSE, warning = FALSE, echo = FALSE}
+ts.plot(univariate_ts4)
+final_garima_full_weekly_fit = univariate_ts4 - residuals(final_garima_full_weekly)
+points(final_garima_full_weekly_fit, type = "l", col=2, lty=2)
+title(main = "Actual Time Series vs. Fitted Time Series")
+```
+
+Above graph shows the evolution for the actual time series (the black line) and the fitted time series (output from the final GARIMA model). The x-axis represent different time points, where each tick value represents a week. The y-axis represents total cases for that particular week and the unit is in tens.
+
+
+
+
+# Summary
+
+```{r, message=FALSE, warning = FALSE, echo = FALSE}
+AIC_column = c(AIC(final_arima), AIC(final_garima), AIC(final_arima_weekly), AIC(final_garima_weekly), AIC(final_arima_full), AIC(final_garima_full), AIC(final_arima_full_weekly), AIC(final_garima_full_weekly))
+
+BIC_column = c(BIC(final_arima), BIC(final_garima), BIC(final_arima_weekly), BIC(final_garima_weekly), BIC(final_arima_full), BIC(final_garima_full), BIC(final_arima_full_weekly), BIC(final_garima_full_weekly))
+
+RMSD_column = c(sqrt(mean((final_arima$residuals)^2)), sqrt(mean((final_garima$residuals)^2)), sqrt(mean((final_arima_weekly$residuals)^2)), sqrt(mean((final_garima_weekly$residuals)^2)), sqrt(mean((final_arima_full$residuals)^2)), sqrt(mean((final_garima_full$residuals)^2)), sqrt(mean((final_arima_full_weekly$residuals)^2)), sqrt(mean((final_garima_full_weekly$residuals)^2)))
+```
+
+
+
+```{r, message=FALSE, warning = FALSE, echo = FALSE}
+final_df = data.frame(AIC_column, BIC_column, RMSD_column)
+colnames(final_df) = c('AIC', 'BIC', 'RMSD')
+rownames(final_df) = c('ARIMA(0,1,2)', 'GARIMA(5,2)', 'ARIMA(0,1,1)', 'GARIMA(1,3)', 'Arima(0,1,1)', 'GARIMA(1,2)', 'ARIMA(1,1,3)', 'GARIMA(2,2)')
+
+final_df
+```
+
+Above table summarizes all the best-performing models chosen by the nested cross validation with grid search. ARIMA(0,1,2) and GARIMA(5,2) are built using the monthly version of the first SNP cluster dataset. ARIMA(0,1,1) and GARIMA(1,3) are built using the weekly version of the first SNP cluster dataset. Arima(0,1,1) and GARIMA(1,2) are built using the monthly version of the full dataset (contains all the SNP clusters). Unit of the count data (frequency) is converted to hundreds. ARIMA(1,1,3) and GARIMA(2,2) are built using the weekly version of the full dataset (contains all the SNP clusters). Unit of the count data (frequency) is converted to tens.
+
+
+
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE, eval=FALSE}
+df <- data.frame(matrix(0, nrow=125, ncol=4))
+colnames(df) = c("p","d","q","MSE_valid")
+```
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE, eval=FALSE}
+p = c(0,1,2,3,4)
+d = c(0,1,2,3,4)
+q = c(0,1,2,3,4)
+
+
+count1 = 1
+
+for(a in p){
+    for (b in d){
+      for (c in q){
+                df[count1,3] = c
+                df[count1,2] = b
+                df[count1,1] = a
+                count1 = count1 + 1
+      }
+    }
+}
+```
+
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE, eval=FALSE}
+
+# nested cross validation with training, validation, and testing set
+
+for (i in 1:4){
+  start = 1
+  end = i * round(nrow(datatouse)/5)
+  end2 = (i+1) * round(nrow(datatouse)/5)
+  if (end2 > nrow(datatouse)){
+    end2 = dim(datatouse)[1]
+  }
+  datatouse_full_train = datatouse[start:end,]
+  datatouse_full_test = datatouse[(end+1):end2,]
+  
+  datatouse_full_train_f = datatouse_full_train$Frequency
+  datatouse_full_test_t = datatouse_full_test$Frequency
+  
+  datatouse_full_train2 = datatouse_full_train[1:floor(0.7*length(datatouse_full_train_f)),]
+  datatouse_full_valid = datatouse_full_train[(floor(0.7*length(datatouse_full_train_f))+1):length(datatouse_full_train_f),]
+  
+  
+  univariate_ts_train = as.ts(datatouse_full_train2$Frequency)
+  
+
+  
+  xreg_test = create_xreg(datatouse_full_test)
+  xreg_full = create_xreg(datatouse_full_train)
+  
+  xreg_valid = xreg_full[(floor(0.7*length(datatouse_full_train_f))+1):length(datatouse_full_train_f),]
+  
+  
+  datatouse_full_valid_series = datatouse_full_valid$Frequency
+  
+  for (j in 1:nrow(df)){   
+    p = df[j,1]
+    d = df[j,2]
+    q = df[j,3]
+    mse_list = c()
+    
+    xreg_train = xreg_full[1:floor(0.7*length(datatouse_full_train_f)),]
+    new_model = Arima(univariate_ts_train, order = c(p,d,q), method = "CSS", xreg = xreg_train)
+    
+    
+    datatouse_full_train2_f = datatouse_full_train2$Frequency
+    
+    for (k in 1:nrow(datatouse_full_valid)){
+      predict_model = predict(new_model, n.ahead=1, newxreg = t(xreg_valid[k,]))
+      mse_list[k] = (predict_model$pred - datatouse_full_valid_series[k])^2
+      datatouse_full_train2_f = append(datatouse_full_train2_f, datatouse_full_valid_series[k])
+      new_data_ts = as.ts(datatouse_full_train2_f)
+      xreg_train = rbind(xreg_train, xreg_valid[k,])
+      new_model = Arima(new_data_ts, model=new_model, xreg = xreg_train)
+    }
+    
+    mse_value_valid = mean(mse_list)
+    mse_value_valid = sqrt(mse_value_valid)  # RMSD 
+    df[j,4] = df[j,4] + mse_value_valid
+  }
+  
+  best_index = which(df$MSE_valid == min(df$MSE_valid))
+  print(best_index)
+  
+  df$MSE_valid = 0
+  
+  new_p = df[best_index,1]
+  new_d = df[best_index,2]
+  new_q = df[best_index,3]
+  
+  
+  xreg_full = create_xreg(datatouse_full_train)
+  final_arima_model = Arima(datatouse_full_train_f, order = c(new_p, new_d, new_q), method = "CSS", xreg = xreg_full)
+  
+  mse_list2 = c()
+  
+
+  for (l in 1:nrow(datatouse_full_test)){
+      predict_model = predict(final_arima_model, n.ahead=1, newxreg = t(xreg_test[l,]))
+      mse_list2[l] = (predict_model$pred - datatouse_full_test_t[l])^2
+      datatouse_full_train_f = append(datatouse_full_train_f, datatouse_full_test_t[l])
+      new_data_ts = as.ts(datatouse_full_train_f)
+      xreg_full = rbind(xreg_full, xreg_test[l,])
+      final_arima_model = Arima(new_data_ts, model=final_arima_model, xreg = xreg_full)
+    }
+  
+  mse_value_test = mean(mse_list2)
+  mse_value_test = sqrt(mse_value_test)  # RMSD 
+  print(mse_value_test)
+}
+```
+
+
+
+
+# Code Appendix:
+
+```{r ref.label=knitr::all_labels(), echo=TRUE, eval=FALSE}
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

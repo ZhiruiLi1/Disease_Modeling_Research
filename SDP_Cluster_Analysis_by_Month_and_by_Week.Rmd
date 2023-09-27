@@ -1,0 +1,159 @@
+---
+title: "SDP Cluster Analysis by Month and by Week"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+library(naniar)
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(tableone)
+```
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+setwd("~/Desktop")
+isolates <- read_csv("isolates.csv")
+```
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+isolates = isolates %>%
+  select(-c(Computed_types, Virulence_genotypes, AST_phenotypes))
+
+isolates = isolates %>%
+  select(-c(Host_disease, PFGE_secondary_enzyme_pattern, PFGE_primary_enzyme_pattern, Outbreak, Stress_genotypes, `Lat/Lon`, Host, Source_type, IFSAC_category, Serovar))
+
+isolates = isolates %>%
+  select(-c(Species_TaxID, `K-mer_group`, Organism_group))
+
+isolates = isolates %>%
+  select(-c(WGS_accession, WGS_prefix, Run, Isolate, Assembly))
+
+isolates = isolates %>%
+  select(-c(AMRFinderPlus_version, PD_Ref_Gene_Catalog_version, Level))
+
+isolates <- isolates %>% 
+    mutate(across(.cols=c(Library_layout, Method, SRA_Center, Platform, AMR_genotypes_core, BioProject, Collection_date, Collected_by, AMRFinderPlus_analysis_type, Scientific_name, Strain, Isolate_identifiers, Location, Isolation_source, Isolation_type, SNP_cluster, BioSample, AMR_genotypes, TaxID), .fns = as.factor))
+
+isolates <- isolates %>% 
+    mutate(across(.cols=c(SRA_release_date, Create_date), .fns = as.Date)) %>%
+    mutate(across(.cols=c(SRA_release_date, Create_date), .fns = as.factor))
+
+isolates = na.omit(isolates)
+
+isolates = isolates %>%
+  select(-c(Library_layout, Method, Platform, AMRFinderPlus_analysis_type, Isolate_identifiers, BioSample ))
+
+isolates = isolates %>%
+  select(-Strain)
+```
+
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+count_SNP_20 = count_SNP[1:20,]
+SNP_percentage = numeric(20)
+for (i in 1:20){
+  SNP_percentage[i] = (count_SNP$Frequency[i]/sum(count_SNP$Frequency))*100
+}
+count_SNP_20['SNP_percentage'] <- SNP_percentage
+```
+
+
+I am going to visualize the evolution of cases within each SNP cluster for Listeria Monocytogenes with month as an interval unit. 
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+for (i in 1:20){
+  new_cluster = isolates %>%
+    filter((SNP_cluster == count_SNP_20[i,1]))
+  
+  new_cluster$Create_date_YM = format(as.Date(new_cluster$Create_date), "%Y-%m")
+  
+  count_date = as.data.frame(table(new_cluster$Create_date_YM))
+  colnames(count_date)[colnames(count_date) == "Var1"] <- "Date"
+  colnames(count_date)[colnames(count_date) == "Freq"] <- "Frequency"
+  
+  
+  cluster_name = count_SNP_20[i,1]
+  plot(count_date, xlab = "Date(year-month)", ylab = "Frequency", main = sprintf("Listeria Monocytogenes Cases Evolution for SNP Cluster %s", cluster_name))
+  
+  count_date = count_date[order(-count_date$Frequency),] # order returns indexes 
+  print(sprintf("This is an outbreak at %s for SNP Cluster %s", count_date[1,1], cluster_name))
+}
+```
+
+
+Next, I am going to visualize the evolution of cases within each SNP cluster for Listeria Monocytogenes with week as an interval unit. For each month, I coded date 1 to date 7 as the first week; date 8 to date 14 as the second week; date 15 to date 21 as the third week; date 22 to date 28 as the fourth week; and the rest of the day within each month as the fifth week. 
+
+
+```{r, message=FALSE, warning=FALSE, echo = FALSE}
+for (i in 1:20){
+  new_cluster = isolates %>%
+    filter((SNP_cluster == count_SNP_20[i,1]))
+  new_cluster$Create_date = format(as.Date(new_cluster$Create_date), "%Y-%m-%d")
+  new_cluster$Create_date_YM = format(as.Date(new_cluster$Create_date), "%Y-%m")
+  
+  for (j in 1:dim(new_cluster[1])){
+  date = as.numeric(format(as.Date(new_cluster$Create_date[j]), "%d"))
+  new_cluster$week[j] = if(date >= 1 && date <= 7){
+    1
+  } else if(date >= 8 && date <= 14){
+    2
+  } else if(date >= 15 && date <= 21){
+    3
+  } else if(date >= 22 && date <= 28){
+    4
+  } else{
+    5
+  }
+  new_cluster$Create_date_YMW[j] = sprintf("%s-%s", new_cluster$Create_date_YM[j], new_cluster$week[j])
+  }
+  
+  count_date = as.data.frame(table(new_cluster$Create_date_YMW))
+  colnames(count_date)[colnames(count_date) == "Var1"] <- "Date"
+  colnames(count_date)[colnames(count_date) == "Freq"] <- "Frequency"
+  
+  
+  cluster_name = count_SNP_20[i,1]
+  plot(count_date, xlab = "Date(year-month-week)", ylab = "Frequency", main = sprintf("Listeria Monocytogenes Cases Evolution for SNP Cluster %s", cluster_name))
+    
+  count_date = count_date[order(-count_date$Frequency),]  # order returns indexes 
+  print(sprintf("This is an outbreak at %s for SNP Cluster %s", count_date[1,1], cluster_name))
+}
+```
+
+
+
+
+# Code Appendix:
+
+```{r ref.label=knitr::all_labels(), echo=TRUE, eval=FALSE}
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
