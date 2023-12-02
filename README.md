@@ -1,1 +1,1 @@
-This research at Brown University, School of Public Health employs meticulously compiled weekly, monthly, and SNP cluster-specific time series data from 2013 to 2022 to robustly model potential listeriosis outbreaks, utilizing advanced time series models in RStudio. 
+This research at Brown University, School of Public Health employs meticulously compiled weekly, monthly, and SNP cluster-specific time series count data from 2013 to 2022 to model potential listeriosis outbreaks, utilizing advanced time series models in RStudio. 
